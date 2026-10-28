@@ -743,15 +743,18 @@ function bboxAround(center, radiusKm) {
 const OVERPASS_URLS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.openstreetmap.ru/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
 ];
+const OVERPASS_ATTEMPT_TIMEOUT_MS = 30000; // pro Server und Versuch
+const OVERPASS_ROUNDS = 2;                 // so oft wird die komplette Serverliste durchprobiert
 // Nur wichtige Straßentypen — keine Tracks, Parkplätze, Fußwege
 const HIGHWAY_TYPES = 'primary|secondary|tertiary|unclassified|residential|living_street|cycleway|track';
 
 function buildOverpassQuery(bbox) {
   const bboxStr = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
   // Timeout auf 10 Sekunden reduziert, nur Straßen (keine Relationen)
-  return `[out:json][timeout:20];
+  return `[out:json][timeout:30];
     way["highway"~"^(${HIGHWAY_TYPES})$"](${bboxStr});
     out body;
     >;
@@ -776,44 +779,56 @@ async function fetchRoadNetwork(location = startLocation, onProgress = () => {})
   onProgress('Frage Kartenserver an…');
 
   // Alle Server GLEICHZEITIG anfragen — der erste, der antwortet, gewinnt.
-  // Das vermeidet lange sequenzielle Wartezeiten, wenn ein Server hängt.
-  const attempts = OVERPASS_URLS.map(async (url, idx) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000);
+  // Die öffentlichen Overpass-Server sind oft überlastet (HTTP 502/504 oder
+  // sehr langsam). Deshalb: mehrere Spiegelserver, großzügigeres Timeout und
+  // eine zweite Runde nach kurzer Pause, bevor ein Fehler gemeldet wird.
+  async function tryAllServersOnce() {
+    const controllers = [];
+    const attempts = OVERPASS_URLS.map(async (url, idx) => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      const timeoutId = setTimeout(() => controller.abort(), OVERPASS_ATTEMPT_TIMEOUT_MS);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          body: query,
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status} (Server ${idx + 1})`);
+        const data = await res.json();
+        clearTimeout(timeoutId);
+        if (!data.elements) throw new Error(`Leere Antwort (Server ${idx + 1})`);
+        return data;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw new Error(`Server ${idx + 1}: ${err.message}`);
+      }
+    });
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        body: query,
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!res.ok) throw new Error(`HTTP ${res.status} (Server ${idx + 1})`);
-      const data = await res.json();
-      if (!data.elements) throw new Error(`Leere Antwort (Server ${idx + 1})`);
+      const data = await Promise.any(attempts);
+      controllers.forEach(c => c.abort()); // langsamere Anfragen abbrechen, Gewinner steht fest
+      return data;
+    } catch (aggregateErr) {
+      if (aggregateErr.errors) aggregateErr.errors.forEach(e => console.error('  →', e.message));
+      throw aggregateErr;
+    }
+  }
+
+  for (let round = 1; round <= OVERPASS_ROUNDS; round++) {
+    try {
+      const data = await tryAllServersOnce();
+      networkCache.set(cacheKey, data);
+      console.log('✅ Straßennetz geladen & gecacht:', data.elements.length, 'Elemente');
       return data;
     } catch (err) {
-      clearTimeout(timeoutId);
-      throw new Error(`Server ${idx + 1}: ${err.message}`);
+      console.error(`❌ Runde ${round}/${OVERPASS_ROUNDS}: alle Overpass-Server fehlgeschlagen`);
+      if (round < OVERPASS_ROUNDS) {
+        onProgress('Kartenserver überlastet — neuer Versuch…');
+        await new Promise(r => setTimeout(r, 3000));
+      }
     }
-  });
-
-  // Gesamt-Sicherheitsnetz: nach 12s definitiv abbrechen, egal was die Server tun
-  const hardTimeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Zeitüberschreitung — alle Kartenserver zu langsam')), 22000)
-  );
-
-  try {
-    const data = await Promise.race([Promise.any(attempts), hardTimeout]);
-    networkCache.set(cacheKey, data);
-    console.log('✅ Straßennetz geladen & gecacht:', data.elements.length, 'Elemente');
-    return data;
-  } catch (aggregateErr) {
-    console.error('❌ Alle Overpass-Server fehlgeschlagen:', aggregateErr);
-    if (aggregateErr.errors) {
-      aggregateErr.errors.forEach(e => console.error('  →', e.message));
-    }
-    throw new Error('Straßennetz-Server aktuell nicht erreichbar. Bitte kurz erneut versuchen.');
   }
+  throw new Error('Die Kartenserver sind gerade überlastet. In ein paar Minuten erneut versuchen.');
 }
 
 // Baut aus den rohen OSM-Elementen einen Graphen aus Knoten/Kanten.
