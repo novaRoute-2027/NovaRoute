@@ -2069,14 +2069,62 @@ function decodePolyline(str, precision = 5) {
   return coords;
 }
 
-// Dünnt sehr punktreiche Routen für den Link gleichmäßig aus (Anfang/Ende
-// bleiben immer erhalten) — die Linie auf der Karte bleibt dabei glatt,
-// der Link aber trotzdem kurz, egal wie dicht das OSM-Straßennetz war.
-function simplifyForShare(latlngs, maxPoints = 300) {
-  if (latlngs.length <= maxPoints) return latlngs;
-  const step = (latlngs.length - 1) / (maxPoints - 1);
-  const out = [];
-  for (let i = 0; i < maxPoints; i++) out.push(latlngs[Math.round(i * step)]);
+// Vereinfacht die Route für den Link mit dem Douglas-Peucker-Verfahren:
+// gerade Abschnitte brauchen wenige Punkte, Kurven und Abbiegungen behalten
+// ihre Punkte. Die Toleranz (in Metern) wird so lange erhöht, bis höchstens
+// maxPoints Punkte übrig sind. Start und Ziel bleiben immer erhalten.
+function simplifyForShare(latlngs, maxPoints = 200) {
+  const n = latlngs.length;
+  if (n <= 2) return latlngs;
+  const kx = 111320 * Math.cos(latlngs[0][0] * Math.PI / 180), ky = 110540;
+  const xy = latlngs.map(([la, lo]) => [lo * kx, la * ky]);
+
+  function distToSeg(p, a, b) {
+    const bx = b[0] - a[0], by = b[1] - a[1];
+    const len2 = bx * bx + by * by;
+    let t = len2 ? ((p[0] - a[0]) * bx + (p[1] - a[1]) * by) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p[0] - (a[0] + t * bx), p[1] - (a[1] + t * by));
+  }
+  function simplify(tol) {
+    const keep = new Uint8Array(n);
+    keep[0] = keep[n - 1] = 1;
+    const stack = [[0, n - 1]];
+    while (stack.length) {
+      const [s0, e0] = stack.pop();
+      let maxD = 0, idx = -1;
+      for (let i = s0 + 1; i < e0; i++) {
+        const d = distToSeg(xy[i], xy[s0], xy[e0]);
+        if (d > maxD) { maxD = d; idx = i; }
+      }
+      if (idx !== -1 && maxD > tol) { keep[idx] = 1; stack.push([s0, idx], [idx, e0]); }
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) if (keep[i]) out.push(latlngs[i]);
+    return out;
+  }
+  let tol = 8, out = simplify(tol);
+  while (out.length > maxPoints && tol < 5000) { tol *= 1.4; out = simplify(tol); }
+  return out;
+}
+
+// Der Polyline-Code nutzt die ASCII-Zeichen 63–126 (u. a. | ? @ \ ^ { }),
+// die in Links Probleme machen. Deshalb wird jedes Zeichen 1:1 auf ein
+// URL-sicheres Zeichen abgebildet (64 Stück: A-Z a-z 0-9 - _). Dadurch
+// braucht der Link keine %-Kodierung und wird ca. 20 % kürzer.
+const SHARE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+function polylineToUrlSafe(poly) {
+  let out = '';
+  for (let i = 0; i < poly.length; i++) out += SHARE_ALPHABET[poly.charCodeAt(i) - 63];
+  return out;
+}
+function urlSafeToPolyline(str) {
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    const idx = SHARE_ALPHABET.indexOf(str[i]);
+    if (idx < 0) throw new Error('Ungültiges Zeichen im Teilen-Link');
+    out += String.fromCharCode(idx + 63);
+  }
   return out;
 }
 
@@ -2084,12 +2132,12 @@ function buildShareUrl() {
   if (!currentRouteLatLngs || currentRouteLatLngs.length < 2 || !currentRouteInfo) return null;
   try {
     const simplified = simplifyForShare(currentRouteLatLngs);
-    const encoded = encodePolyline(simplified);
-    const km = Math.round(currentRouteInfo.distKm * 10) / 10;
+    const poly = polylineToUrlSafe(encodePolyline(simplified));
+    const km10 = Math.round(currentRouteInfo.distKm * 10); // km mal 10, damit kein Dezimalpunkt nötig ist
     const hm = Math.round(currentRouteInfo.hm);
     const n = Math.round(currentRouteInfo.neulandScore);
-    const compact = `${encoded}|${km}|${hm}|${n}`;
-    return `${location.origin}${location.pathname}#r=${encodeURIComponent(compact)}`;
+    // Format: #s=<km*10>.<hm>.<neuland>.<route>
+    return `${location.origin}${location.pathname}#s=${km10}.${hm}.${n}.${poly}`;
   } catch (err) {
     console.warn('⚠️ Konnte Teilen-Link nicht bauen:', err.message);
     return null;
@@ -2130,12 +2178,26 @@ function drawSharedRoute(points, info) {
 function applyShareFromUrlIfPresent() {
   if (!location.hash) return;
 
-  // Neues, kompaktes Format (#r=...): Polyline-kodierte Punkte + Stats
+  // Aktuelles Format (#s=km10.hm.neuland.route)
+  if (location.hash.startsWith('#s=')) {
+    try {
+      const [km10, hm, n, poly] = location.hash.slice('#s='.length).split('.');
+      const points = decodePolyline(urlSafeToPolyline(poly));
+      if (points.length < 2) return;
+      drawSharedRoute(points, { distKm: parseInt(km10, 10) / 10, hm: parseInt(hm, 10), neulandScore: parseInt(n, 10) });
+    } catch (err) {
+      console.warn('⚠️ Geteilte Route konnte nicht geladen werden:', err.message);
+    }
+    return;
+  }
+
+  // Zwischenformat (#r=...|km|hm|neuland). Der Routen-Code kann selbst ein
+  // "|" enthalten, deshalb werden die drei Werte von HINTEN abgetrennt.
   if (location.hash.startsWith('#r=')) {
     try {
-      const raw = decodeURIComponent(location.hash.slice('#r='.length));
-      const [encoded, kmStr, hmStr, nStr] = raw.split('|');
-      const points = decodePolyline(encoded);
+      const parts = decodeURIComponent(location.hash.slice('#r='.length)).split('|');
+      const nStr = parts.pop(), hmStr = parts.pop(), kmStr = parts.pop();
+      const points = decodePolyline(parts.join('|'));
       if (points.length < 2) return;
       drawSharedRoute(points, { distKm: parseFloat(kmStr), hm: parseFloat(hmStr), neulandScore: parseFloat(nStr) });
     } catch (err) {
@@ -2749,19 +2811,40 @@ if (shareRouteBtn) {
 function renderShareQr(url) {
   const wrap = document.getElementById('shareQrWrap');
   const canvas = document.getElementById('shareQrCanvas');
+  const statusEl = document.getElementById('shareStatus');
   if (!wrap || !canvas) return;
-  if (typeof QRCode === 'undefined' || !QRCode.toCanvas) {
+  if (typeof qrcode === 'undefined') {
     wrap.hidden = true;
+    if (statusEl) statusEl.textContent += ' (QR-Code-Bibliothek nicht geladen: Datei qrcode-generator.js fehlt.)';
     return;
   }
-  QRCode.toCanvas(canvas, url, { width: 180, margin: 1 }, (err) => {
-    if (err) {
-      console.warn('⚠️ QR-Code konnte nicht erzeugt werden:', err.message);
-      wrap.hidden = true;
-      return;
+  try {
+    const qr = qrcode(0, 'L'); // Typ automatisch, niedrige Fehlerkorrektur = größere Kästchen
+    qr.addData(url);
+    qr.make();
+    const count = qr.getModuleCount();
+    const quiet = 2;
+    const ms = Math.max(3, Math.floor(300 / (count + quiet * 2)));
+    const size = (count + quiet * 2) * ms;
+    canvas.width = size;
+    canvas.height = size;
+    canvas.style.maxWidth = '100%';
+    canvas.style.height = 'auto';
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < count; r++) {
+      for (let c = 0; c < count; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * ms, (r + quiet) * ms, ms, ms);
+      }
     }
     wrap.hidden = false;
-  });
+  } catch (err) {
+    console.warn('⚠️ QR-Code konnte nicht erzeugt werden:', err.message);
+    wrap.hidden = true;
+    if (statusEl) statusEl.textContent += ' (Route ist zu lang für einen QR-Code.)';
+  }
 }
 
 // Neuland-Einfärbung auf der Route ein/ausschalten
