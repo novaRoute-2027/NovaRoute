@@ -723,7 +723,7 @@ const layerControl = L.control.layers(
   {
     '💨 Live-Windkarte': windFlowLayer,
   },
-  { position: 'topright', collapsed: false }
+  { position: 'topright', collapsed: isNarrowScreen() }
 );
 layerControl.addTo(map);
 console.log('✅ LayerControl hinzugefügt mit 3 Basis-Layer + animierter Wind-Overlay');
@@ -1571,6 +1571,9 @@ function loadSavedRouteOntoMap(entry) {
   document.getElementById('statKm').textContent = `${entry.distKm.toFixed(1)} km`;
   document.getElementById('statHm').textContent = `≈ ${entry.hm} Hm`;
   document.getElementById('distWarning').hidden = true;
+
+  updatePanelOpenLabel(entry.distKm, entry.hm);
+  autoCollapsePanelOnNarrowScreen();
 }
 
 function renderSavedRoutes() {
@@ -1681,6 +1684,7 @@ function clearRoute() {
   currentIsAB = false;
   isSharedRouteView = false;
   clearNeulandOverlay();
+  updatePanelOpenLabel(null);
   const altContainer = document.getElementById('routeAlternatives');
   if (altContainer) { altContainer.innerHTML = ''; altContainer.hidden = true; }
   const reverseHint = document.getElementById('reverseHint');
@@ -1972,6 +1976,9 @@ function applySelectedAlternative(idx) {
 
   if (neulandOverlayActive) drawNeulandOverlay(); else clearNeulandOverlay();
   renderElevationProfile(buildElevationProfile(route.edges, startNodeId, graph));
+
+  updatePanelOpenLabel(route.distKm, route.hm);
+  autoCollapsePanelOnNarrowScreen();
 }
 
 // ---- Route umkehren (Feature 3) --------------------------------------------
@@ -2173,6 +2180,9 @@ function drawSharedRoute(points, info) {
 
   const explanationEl = document.getElementById('routeExplanation');
   if (explanationEl) explanationEl.textContent = '🔗 Diese Route wurde über einen Teilen-Link geladen. Zum Weiterbearbeiten links Start/Ziel neu wählen.';
+
+  updatePanelOpenLabel(info.distKm, info.hm);
+  autoCollapsePanelOnNarrowScreen();
 }
 
 function applyShareFromUrlIfPresent() {
@@ -2855,6 +2865,40 @@ if (neulandOverlayToggle) {
     if (neulandOverlayActive) drawNeulandOverlay(); else clearNeulandOverlay();
   });
 }
+
+// ---- Seitenleiste ein-/ausklappen (v. a. fürs Handy) ------------------------
+// Auf schmalen Bildschirmen liegt die Leiste als Vollbild über der Karte. Nach
+// dem Erzeugen/Laden einer Route klappt sie dort automatisch zu, damit man die
+// Route sieht; die schwebende Taste unten links zeigt dann km und Hm an und
+// holt die Leiste zurück. Alle Zugriffe sind null-sicher, damit die Mobile-
+// Varianten (ohne diese Elemente) unverändert funktionieren.
+
+function isNarrowScreen() {
+  return !!(window.matchMedia && window.matchMedia('(max-width: 700px)').matches);
+}
+
+function setPanelCollapsed(collapsed) {
+  document.body.classList.toggle('panel-collapsed', collapsed);
+  // Die Karte hat jetzt mehr/weniger Platz — Leaflet muss das mitbekommen
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
+function autoCollapsePanelOnNarrowScreen() {
+  if (isNarrowScreen() && document.getElementById('panelOpenBtn')) setPanelCollapsed(true);
+}
+
+function updatePanelOpenLabel(distKm, hm) {
+  const btn = document.getElementById('panelOpenBtn');
+  if (!btn) return;
+  btn.textContent = (typeof distKm === 'number' && !isNaN(distKm))
+    ? `☰ ${distKm.toFixed(1)} km · ${hm} Hm`
+    : '☰ Menü';
+}
+
+const panelCollapseBtn = document.getElementById('panelCollapseBtn');
+if (panelCollapseBtn) panelCollapseBtn.addEventListener('click', () => setPanelCollapsed(true));
+const panelOpenBtn = document.getElementById('panelOpenBtn');
+if (panelOpenBtn) panelOpenBtn.addEventListener('click', () => setPanelCollapsed(false));
 
 // Beim Laden prüfen, ob ein Teilen-Link (#route=...) in der URL steckt
 applyShareFromUrlIfPresent();
