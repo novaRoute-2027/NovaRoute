@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Novaroute — Finde Straßen, die du noch nie gefahren bist</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar / Control Panel -->
+    <aside class="panel">
+      <div class="panel__header">
+        <div class="brand">
+          <span class="brand__name">NOVAROUTE</span>
+        </div>
+        <p class="brand__tagline">Finde neue Wege zum Fahren</p>
+      </div>
+
+      <div class="panel__content">
+        <!-- 00: Start und Ziel -->
+        <section class="panel__block">
+          <h2 class="eyebrow">00 — Start &amp; Ziel</h2>
+          
+          <div class="field">
+            <label class="field__label">Start</label>
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="startLocationInput" class="location-input" placeholder="Stadt oder Adresse…" style="flex: 1;">
+              <button class="btn btn--ghost" id="startSearchBtn" style="padding: 10px 12px;">🔍</button>
+            </div>
+            <button class="btn btn--ghost location-geo-btn" id="startGeoBtn">📍 Aktuell</button>
+            <p class="hint" id="startLocationHint">Ort eingeben und 🔍 oder Enter drücken</p>
+            <div id="quickLocations" style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;"></div>
+          </div>
+
+          <div class="field">
+            <label class="field__label">Ziel</label>
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="endLocationInput" class="location-input" placeholder="Stadt oder Adresse…" style="flex: 1;">
+              <button class="btn btn--ghost" id="endSearchBtn" style="padding: 10px 12px;">🔍</button>
+              <button class="btn btn--ghost" id="endClearBtn" style="padding: 10px 8px; min-width: 40px;">✕</button>
+            </div>
+            <button class="btn btn--ghost location-geo-btn" id="endGeoBtn">📍 Aktuell</button>
+            <p class="hint" id="endLocationHint">✓ Leer → Rundtour ab Start</p>
+          </div>
+
+          <p class="hint">Leer = Rundtour ab Start</p>
+        </section>
+
+        <!-- 01: Zieldistanz -->
+        <section class="panel__block">
+          <h2 class="eyebrow">01 — Zieldistanz</h2>
+          <div class="field">
+            <label class="field__label" for="kmInput">
+              <span id="kmValue">40</span> km
+            </label>
+            <input type="range" id="kmInput" min="15" max="90" value="40" step="5">
+          </div>
+        </section>
+
+        <!-- 02: Höhenmeter -->
+        <section class="panel__block">
+          <h2 class="eyebrow">02 — Höhenmeter</h2>
+          <div class="field">
+            <label class="field__label" for="hmInput">
+              <span id="hmValue">700</span> hm
+            </label>
+            <input type="range" id="hmInput" min="100" max="2000" value="700" step="50">
+          </div>
+          <p class="hint" id="elevationStatus" style="margin-top: 4px;">Höhendaten: noch nicht geladen (simuliert).</p>
+        </section>
+
+        <!-- 03: Neuland-Anteil -->
+        <section class="panel__block">
+          <h2 class="eyebrow">03 — Neuland-Anteil</h2>
+          <div class="field">
+            <label class="field__label" for="neulandInput">
+              <span id="neulandValue">70</span>%
+            </label>
+            <input type="range" id="neulandInput" min="0" max="100" value="70" step="5">
+          </div>
+          <p class="hint">0% = bekannte Wege · 100% = lieber Neuland</p>
+        </section>
+
+        <!-- 04: Wind-Präferenz -->
+        <section class="panel__block">
+          <h2 class="eyebrow">04 — Gegenwind-Vermeidung</h2>
+          <div class="field">
+            <label class="field__label" for="windInput">
+              <span id="windValue">50</span>% meiden
+            </label>
+            <input type="range" id="windInput" min="0" max="100" value="50" step="5">
+          </div>
+          <p class="hint">0% = Wind komplett egal · 100% = Gegenwind stark meiden</p>
+          <div class="wind-status" id="windStatus">
+            <div style="font-size: 11px; color: var(--text-secondary);">
+              💨 Live-Wind wird geladen…
+            </div>
+          </div>
+        </section>
+
+        <!-- 05: Hauptstraßen meiden -->
+        <section class="panel__block">
+          <h2 class="eyebrow">05 — Hauptstraßen meiden</h2>
+          <div class="field">
+            <label class="field__label" for="mainRoadInput">
+              <span id="mainRoadValue">0</span>% meiden
+            </label>
+            <input type="range" id="mainRoadInput" min="0" max="100" value="0" step="5">
+          </div>
+          <p class="hint">0% = egal · 100% = große/verkehrsreiche Straßen stark meiden</p>
+        </section>
+
+        <!-- 06: Fahrhistorie importieren -->
+        <section class="panel__block">
+          <h2 class="eyebrow">06 — Meine Fahrhistorie</h2>
+          <p class="hint" style="margin-bottom: 8px;">Aktivitäts-Dateien aus deinem Strava-Export hochladen (.gpx oder .fit.gz), damit "Neuland" auf echten Daten basiert (statt simuliert).</p>
+          <input type="file" id="gpxFileInput" accept=".gpx,.fit,.gz" multiple style="font-size: 12px; width: 100%;">
+          <div id="gpxImportStatus" style="margin-top: 8px; padding: 8px; background: var(--bg-alt); border-radius: 4px; font-size: 11px; color: var(--text-secondary);">
+            Noch keine Fahrhistorie importiert — "Neuland" wird simuliert.
+          </div>
+          <button class="btn btn--ghost" id="gpxResetBtn" style="width: 100%; margin-top: 6px; font-size: 12px; display: none;">Fahrhistorie zurücksetzen</button>
+        </section>
+
+        <!-- Action Button -->
+        <button class="btn btn--primary" id="generateBtn" style="width: 100%; padding: 12px; font-size: 14px;">Route erkunden</button>
+
+        <!-- Results -->
+        <section class="panel__block panel__block--result" id="resultBlock" hidden>
+          <div class="score">
+            <span class="score__num" id="scoreNum">0</span>
+            <div class="score__label">Neuland-Score</div>
+          </div>
+          <div class="stats">
+            <div class="stats__item">
+              <dt>Distanz</dt>
+              <dd id="statKm">–</dd>
+            </div>
+            <div class="stats__item">
+              <dt>Höhenmeter</dt>
+              <dd id="statHm">–</dd>
+            </div>
+          </div>
+          <p class="dist-warning" id="distWarning" hidden></p>
+
+          <div id="routeAlternatives" class="alt-cards" hidden></div>
+
+          <div id="elevationProfileWrap" class="elevation-profile" hidden>
+            <canvas id="elevationProfileCanvas"></canvas>
+          </div>
+
+          <label class="neuland-overlay-toggle">
+            <input type="checkbox" id="neulandOverlayToggle" checked>
+            🔴🟢 Rot = bereits gefahren · Grün = Neuland (schwarz umrandet)
+          </label>
+
+          <p class="hint" id="routeExplanation" style="margin-top: 6px; line-height: 1.5;"></p>
+          <p class="hint" id="reverseHint" hidden style="color: var(--accent-blue);">🔄 Richtung umgekehrt (Höhenmeter beziehen sich auf die ursprüngliche Richtung)</p>
+
+          <button class="btn btn--ghost" id="reverseRouteBtn" style="width: 100%; margin-top: 10px;">🔄 Richtung umkehren</button>
+          <button class="btn btn--ghost" id="shareRouteBtn" style="width: 100%; margin-top: 6px;">🔗 Route teilen</button>
+          <p class="hint" id="shareStatus" style="margin-top: 4px;"></p>
+          <div id="shareQrWrap" hidden style="text-align: center; margin-top: 6px;">
+            <canvas id="shareQrCanvas"></canvas>
+            <p class="hint">📷 Mit dem Handy scannen, statt den Link abzutippen</p>
+          </div>
+          <button class="btn btn--ghost" id="gpxExportBtn" style="width: 100%; margin-top: 6px;">⬇️ Als GPX exportieren</button>
+          <button class="btn btn--ghost" id="routeSaveBtn" style="width: 100%; margin-top: 6px;">💾 Route speichern</button>
+        </section>
+
+        <!-- 07: Gespeicherte Routen -->
+        <section class="panel__block">
+          <h2 class="eyebrow">07 — Gespeicherte Routen</h2>
+          <div id="savedRoutesList" style="display: flex; flex-direction: column; gap: 6px;">
+            <p class="hint" id="savedRoutesEmpty">Noch keine Routen gespeichert.</p>
+          </div>
+        </section>
+
+        <!-- Footer -->
+        <p class="disclaimer">Echtes Straßennetz (OpenStreetMap, ca. 11 km Umkreis). "Neuland" basiert auf importierter Fahrhistorie, falls vorhanden — sonst simuliert.</p>
+      </div>
+    </aside>
+
+    <!-- Map -->
+    <div class="map-wrap">
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
