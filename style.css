@@ -31,7 +31,7 @@ html, body {
   line-height: 1.5;
 }
 
-.app-container { display: flex; height: 100vh; }
+.app-container { display: flex; height: 100vh; height: 100dvh; }
 
 .panel {
   width: 320px;
@@ -531,3 +531,63 @@ input[type="range"]::-moz-range-thumb:hover {
   cursor: pointer;
 }
 .neuland-overlay-toggle input { cursor: pointer; }
+
+/* ---- Seitenleiste ein-/ausblenden (v. a. fürs Handy) ---- */
+
+.panel__header { position: relative; }
+
+/* Schwebende Taste auf der Karte, nur sichtbar wenn die Leiste ausgeblendet ist */
+.panel-open-btn {
+  position: absolute;
+  left: 12px;
+  bottom: 28px;
+  z-index: 1000;
+  padding: 12px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+body:not(.panel-collapsed) .panel-open-btn { display: none; }
+
+body.panel-collapsed .panel { display: none; }
+
+/* Zugeklappte Ebenen-Auswahl (Handy): kleines Symbol statt breitem Kasten */
+.leaflet-control-layers:not(.leaflet-control-layers-expanded) {
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+
+/* Auf schmalen Bildschirmen liegt die Seitenleiste als Vollbild über der Karte */
+@media (max-width: 700px) {
+  .app-container { position: relative; }
+  .panel {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%;
+    z-index: 1500;
+    border-right: none;
+  }
+  .panel__header { padding: 18px 16px; }
+  .panel__content { padding: 16px; }
+}
+
+/* ---- Seitenleiste ein-/ausklappen ---- */
+
+.panel-toggle {
+  flex-shrink: 0;
+  display: block;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-blue);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.panel-toggle:hover { background: #2563eb; }
